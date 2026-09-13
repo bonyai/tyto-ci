@@ -5,8 +5,8 @@ import (
 	"errors"
 )
 
-// ErrProvisioningUnavailable makes the current integration boundary explicit:
-// Tyto's public sandbox API must first grow CI leases and trusted job metadata.
+// ErrProvisioningUnavailable is returned when the deployment has not enabled
+// the TAPI Temporal-job provisioner.
 var ErrProvisioningUnavailable = errors.New("sandbox provisioning is not configured")
 
 type UnconfiguredProvisioner struct{}

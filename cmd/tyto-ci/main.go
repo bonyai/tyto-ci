@@ -2,13 +2,16 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/bonyai/tyto-ci/internal/ci"
 	"github.com/bonyai/tyto-ci/internal/httpapi"
+	"github.com/bonyai/tyto-ci/internal/provider"
 )
 
 func main() {
@@ -26,7 +29,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	scheduler, err := ci.NewSchedulerWithStore(profiles, ci.UnconfiguredProvisioner{}, store)
+	backend, err := provisionerFromEnvironment()
+	if err != nil {
+		log.Fatal(err)
+	}
+	scheduler, err := ci.NewSchedulerWithStore(profiles, backend, store)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -47,6 +54,33 @@ func main() {
 	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+func provisionerFromEnvironment() (ci.Provisioner, error) {
+	baseURL, token := os.Getenv("TYTO_CI_TAPI_URL"), os.Getenv("TYTO_CI_TAPI_TOKEN")
+	if baseURL == "" && token == "" {
+		return ci.UnconfiguredProvisioner{}, nil
+	}
+	if baseURL == "" || token == "" {
+		return nil, fmt.Errorf("TYTO_CI_TAPI_URL and TYTO_CI_TAPI_TOKEN must be set together")
+	}
+	installationToken := os.Getenv("TYTO_CI_GITHUB_INSTALLATION_TOKEN")
+	if installationToken == "" {
+		return nil, fmt.Errorf("TYTO_CI_GITHUB_INSTALLATION_TOKEN is required with TAPI provisioning")
+	}
+	github := provider.GitHubJITClient{BaseURL: os.Getenv("TYTO_CI_GITHUB_API_URL")}
+	return ci.TAPIProvisioner{BaseURL: baseURL, Token: token, GitHubJIT: func(ctx context.Context, job ci.Job) (string, error) {
+		owner, repo, found := strings.Cut(job.Project, "/")
+		if !found || owner == "" || repo == "" {
+			return "", fmt.Errorf("GitHub project must be owner/repository, got %q", job.Project)
+		}
+		name := "tyto-" + strings.NewReplacer("/", "-", "_", "-").Replace(job.ID)
+		jit, err := github.CreateJITRunner(ctx, installationToken, owner, repo, name, job.Labels)
+		if err != nil {
+			return "", err
+		}
+		return jit.Encoded, nil
+	}}, nil
 }
 
 func reapExpired(scheduler *ci.Scheduler) {

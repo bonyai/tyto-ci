@@ -38,7 +38,7 @@ test:
    durable job-to-sandbox state.
 2. **Secure identity boundary** — RS256/JWKS OIDC verification primitives for
    GitHub Actions and GitLab job ID tokens. Tokens and provider credentials are
-   never put in state files.
+   never put in the Tyto CI state file.
 3. **Provider runner integration** — a GitHub REST client for one-use JIT
    runner configuration and validated GitLab custom-executor configuration.
 4. **Runner compatibility policy** — v1 explicitly allows shell, JavaScript,
@@ -73,18 +73,22 @@ Endpoints:
 
 ## Production wiring still required
 
-This repository intentionally has no fake sandbox provisioning. The Tyto
-compute API must first support trusted CI metadata plus server-enforced leases:
-the provider, provider job ID, project identity, selected profile, expiry, and
-an orphan-safe delete operation. Implement `ci.Provisioner` against that API
-and pass it to `ci.NewSchedulerWithStore` in place of
-`ci.UnconfiguredProvisioner`.
+Set `TYTO_CI_TAPI_URL`, `TYTO_CI_TAPI_TOKEN`, and a short-lived
+`TYTO_CI_GITHUB_INSTALLATION_TOKEN` to enable the built-in Temporal-backed
+TAPI provisioner. It calls `POST /v1/job` with a disposable sandbox and
+`disposition: delete`; cleanup or cancellation calls
+`POST /v1/job/{run_id}/cancel`.
+
+The current TAPI workflow stores job environment values in Temporal history.
+Because GitHub JIT configuration is credential material, enable this only when
+Temporal payload encryption and restricted history access are configured. A
+future TAPI secret-reference field should replace this environment injection.
 
 An operator must also configure the following outside the repository:
 
 - a GitHub App (webhook secret, installation-token minting, and Actions runner
-  permission), then supply its short-lived installation token to
-  `provider.GitHubJITClient` per job;
+  permission), then refresh `TYTO_CI_GITHUB_INSTALLATION_TOKEN` in the service
+  deployment before it expires;
 - a GitLab hosted/custom runner registration and its runtime-only runner token;
 - trusted GitHub/GitLab OIDC issuer, JWKS URL, audience, and project claim
   configuration for `oidc.Verifier`;

@@ -60,13 +60,23 @@ func githubWebhook(secret string, scheduler *ci.Scheduler) http.HandlerFunc {
 				Labels     []string `json:"labels"`
 				HeadSHA    string   `json:"head_sha"`
 				HeadBranch string   `json:"head_branch"`
+				Conclusion string   `json:"conclusion"`
 			} `json:"workflow_job"`
 		}
-		if json.Unmarshal(body, &event) != nil || event.Action != "queued" {
+		if json.Unmarshal(body, &event) != nil {
+			http.Error(w, "invalid GitHub webhook", http.StatusBadRequest)
+			return
+		}
+		jobID := "github/" + itoa(event.WorkflowJob.ID)
+		if event.Action == "completed" && event.WorkflowJob.Conclusion == "cancelled" {
+			respondProvisionError(w, scheduler.Cleanup(r.Context(), jobID))
+			return
+		}
+		if event.Action != "queued" {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		_, err = scheduler.Provision(r.Context(), ci.Job{ID: "github/" + itoa(event.WorkflowJob.ID), Provider: ci.ProviderGitHub, Project: event.Repository.FullName, Ref: event.WorkflowJob.HeadBranch, CommitSHA: event.WorkflowJob.HeadSHA, Labels: event.WorkflowJob.Labels, QueuedAt: time.Now().UTC()})
+		_, err = scheduler.Provision(r.Context(), ci.Job{ID: jobID, Provider: ci.ProviderGitHub, Project: event.Repository.FullName, Ref: event.WorkflowJob.HeadBranch, CommitSHA: event.WorkflowJob.HeadSHA, Labels: event.WorkflowJob.Labels, QueuedAt: time.Now().UTC()})
 		respondProvisionError(w, err)
 	}
 }
@@ -90,11 +100,20 @@ func gitlabWebhook(token string, scheduler *ci.Scheduler) http.HandlerFunc {
 				TagList []string `json:"tag_list"`
 			} `json:"object_attributes"`
 		}
-		if json.NewDecoder(r.Body).Decode(&event) != nil || event.ObjectKind != "build" || event.Object.Status != "pending" {
+		if json.NewDecoder(r.Body).Decode(&event) != nil {
+			http.Error(w, "invalid GitLab webhook", http.StatusBadRequest)
+			return
+		}
+		jobID := "gitlab/" + itoa(event.Object.ID)
+		if event.ObjectKind == "build" && event.Object.Status == "canceled" {
+			respondProvisionError(w, scheduler.Cleanup(r.Context(), jobID))
+			return
+		}
+		if event.ObjectKind != "build" || event.Object.Status != "pending" {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		_, err := scheduler.Provision(r.Context(), ci.Job{ID: "gitlab/" + itoa(event.Object.ID), Provider: ci.ProviderGitLab, Project: event.Project.PathWithNamespace, Ref: event.Object.Ref, CommitSHA: event.Object.SHA, Labels: event.Object.TagList, QueuedAt: time.Now().UTC()})
+		_, err := scheduler.Provision(r.Context(), ci.Job{ID: jobID, Provider: ci.ProviderGitLab, Project: event.Project.PathWithNamespace, Ref: event.Object.Ref, CommitSHA: event.Object.SHA, Labels: event.Object.TagList, QueuedAt: time.Now().UTC()})
 		respondProvisionError(w, err)
 	}
 }
